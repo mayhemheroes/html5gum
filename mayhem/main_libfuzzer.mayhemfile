@@ -1,0 +1,17 @@
+project: html5gum
+target: main-libfuzzer
+
+cmds:
+  - cmd: /main_libfuzzer
+    env:
+      FUZZ_BASIC: "1"
+      FUZZ_OLD_HTML5GUM: "0"
+      FUZZ_HTML5EVER: "0"
+      FUZZ_LOLHTML: "0"
+  - cmd: /main_libfuzzer_no_inst @@
+    libfuzzer: false
+    env:
+      FUZZ_BASIC: "1"
+      FUZZ_OLD_HTML5GUM: "0"
+      FUZZ_HTML5EVER: "0"
+      FUZZ_LOLHTML: "0"

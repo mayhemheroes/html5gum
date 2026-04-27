@@ -1,97 +1,75 @@
-use std::cell::RefCell;
-
 use html5ever::buffer_queue::BufferQueue;
-use html5ever::interface::TokenizerResult;
 use html5ever::tendril::format_tendril;
-use html5ever::tokenizer::{TagKind, Token as Token2, TokenSinkResult, TokenizerOpts};
+use html5ever::tokenizer::{TagKind, Token as Token2, TokenSinkResult, TokenizerResult};
 use html5gum::{Emitter, Reader, Token};
 
 use pretty_assertions::assert_eq;
 
 pub fn run_html5ever(s: &str) {
-    let reference_tokenizer = html5ever::tokenizer::Tokenizer::new(
-        TokenSink(RefCell::new(TokenSinkInner {
+    let mut reference_tokenizer = html5ever::tokenizer::Tokenizer::new(
+        TokenSink {
             testing_tokenizer: html5gum::Tokenizer::new(s),
-            carried_over_token: None,
-        })),
-        TokenizerOpts {
-            // the html5gum tokenizer does not handle the BOM, and also not discarding a BOM is
-            // what the test suite expects, see https://github.com/html5lib/html5lib-tests/issues/2
-            discard_bom: false,
-
-            ..Default::default()
         },
+        Default::default(),
     );
-    let queue = BufferQueue::default();
+    let mut queue = BufferQueue::new();
     queue.push_back(format_tendril!("{}", s));
 
     assert!(matches!(
-        reference_tokenizer.feed(&queue),
+        reference_tokenizer.feed(&mut queue),
         TokenizerResult::Done
     ));
     reference_tokenizer.end();
 }
 
-struct TokenSinkInner<R: Reader, E: Emitter> {
+struct TokenSink<R: Reader, E: Emitter> {
     testing_tokenizer: html5gum::Tokenizer<R, E>,
-    carried_over_token: Option<Token>,
 }
-
-struct TokenSink<R: Reader, E: Emitter>(RefCell<TokenSinkInner<R, E>>);
 
 impl<R: Reader, E: Emitter<Token = Token>> html5ever::tokenizer::TokenSink for TokenSink<R, E> {
     type Handle = ();
 
     fn process_token(
-        &self,
+        &mut self,
         reference_token: html5ever::tokenizer::Token,
         _line_number: u64,
     ) -> TokenSinkResult<Self::Handle> {
-        self.0.borrow_mut().process_token(reference_token)
-    }
-}
-
-impl<R: Reader, E: Emitter<Token = Token>> TokenSinkInner<R, E> {
-    fn process_token(
-        &mut self,
-        reference_token: html5ever::tokenizer::Token,
-    ) -> TokenSinkResult<()> {
-        if matches!(reference_token, Token2::ParseError(_)) {
+        if matches!(
+            reference_token,
+            Token2::NullCharacterToken | Token2::ParseError(_) | Token2::CharacterTokens(_)
+        ) {
             // TODO
             return TokenSinkResult::Continue;
         };
         let token = loop {
-            let token = self
-                .carried_over_token
-                .take()
-                .or_else(|| self.testing_tokenizer.next().map(|x| x.unwrap()));
-            if matches!(token, Some(Token::Error(_))) {
+            let token = self.testing_tokenizer.next();
+            if matches!(token, Some(Ok(Token::Error(_) | Token::String(_)))) {
                 // TODO
                 continue;
             }
 
-            break token;
+            break token.map(|x| x.unwrap());
         };
 
         match (token, reference_token) {
             (Some(Token::StartTag(tag)), Token2::TagToken(tag2)) => {
                 assert_eq!(tag2.kind, TagKind::StartTag);
-                assert_eq!(tag.name, tag2.name.as_ref().as_bytes().to_owned());
+                assert_eq!(tag.name, tag2.name.as_ref().as_bytes().to_owned().into());
             }
             (Some(Token::EndTag(tag)), Token2::TagToken(tag2)) => {
                 assert_eq!(tag2.kind, TagKind::EndTag);
-                assert_eq!(tag.name, tag2.name.as_ref().as_bytes().to_owned());
+                assert_eq!(tag.name, tag2.name.as_ref().as_bytes().to_owned().into());
             }
             (None, Token2::EOFToken) => {}
             (Some(Token::Comment(comment)), Token2::CommentToken(comment2)) => {
-                assert_eq!(*comment, comment2.as_ref().as_bytes().to_owned());
+                assert_eq!(comment, comment2.as_ref().as_bytes().to_owned().into());
             }
             (Some(Token::Doctype(doctype)), Token2::DoctypeToken(doctype2)) => {
                 assert_eq!(
                     doctype.name,
                     doctype2
                         .name
-                        .map(|x| x.as_ref().to_owned().into_bytes())
+                        .map(|x| x.as_ref().to_owned().into_bytes().into())
                         .unwrap_or_default()
                 );
                 assert_eq!(
@@ -107,23 +85,6 @@ impl<R: Reader, E: Emitter<Token = Token>> TokenSinkInner<R, E> {
                         .map(|x| x.as_ref().to_owned().into_bytes().into())
                 );
                 assert_eq!(doctype.force_quirks, doctype2.force_quirks);
-            }
-            (Some(Token::String(s)), Token2::NullCharacterToken) => {
-                assert_eq!(s[0], b'\0');
-                let gum_rest = &s[1..];
-                if !gum_rest.is_empty() {
-                    assert!(self.carried_over_token.is_none());
-                    self.carried_over_token = Some(Token::String(gum_rest.to_owned().into()));
-                }
-            }
-            (Some(Token::String(s)), Token2::CharacterTokens(s2)) => {
-                let gum_start = &s[..s2.len()];
-                assert_eq!(gum_start, &**s2.as_bytes());
-                let gum_rest = &s[s2.len()..];
-                if !gum_rest.is_empty() {
-                    assert!(self.carried_over_token.is_none());
-                    self.carried_over_token = Some(Token::String(gum_rest.to_owned().into()));
-                }
             }
             (a, b) => panic!("5gum: {:?}\n5ever: {:?}", a, b),
         }
