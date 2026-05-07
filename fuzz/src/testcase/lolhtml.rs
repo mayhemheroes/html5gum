@@ -44,7 +44,7 @@ pub fn run_lolhtml(data: &[u8]) {
             output_sink: |_: &[u8]| (),
             preallocated_parsing_buffer_size: 0,
             memory_limiter,
-            encoding: encoding_rs::UTF_8,
+            encoding: encoding_rs::UTF_8.into(),
             // we need the dumb, insecure behavior of lolhtml to match what a tokenizer does
             strict: false,
         });
